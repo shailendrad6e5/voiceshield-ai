@@ -121,6 +121,115 @@ async function apiRequest(path, options = {}) {
   }
 }
 
+function normaliseSnapshot(candidate) {
+  const snapshot = candidate && typeof candidate === 'object' ? candidate : {};
+  const ledger = snapshot.ledger && typeof snapshot.ledger === 'object' ? snapshot.ledger : {};
+  return {
+    stats: snapshot.stats && typeof snapshot.stats === 'object' ? snapshot.stats : {},
+    analyses: Array.isArray(snapshot.analyses) ? snapshot.analyses.filter((item) => item && typeof item === 'object') : [],
+    alerts: Array.isArray(snapshot.alerts) ? snapshot.alerts.filter((item) => item && typeof item === 'object') : [],
+    ledger: {
+      ...ledger,
+      valid: typeof ledger.valid === 'boolean' ? ledger.valid : false,
+      items: Array.isArray(ledger.items) ? ledger.items.filter((item) => item && typeof item === 'object') : []
+    }
+  };
+}
+
+function mergeRecords(localItems, apiItems, idField, mergeRecord) {
+  const merged = new Map();
+  localItems.forEach((item) => {
+    if (item[idField]) merged.set(item[idField], item);
+  });
+  apiItems.forEach((item) => {
+    if (!item[idField]) return;
+    const localItem = merged.get(item[idField]);
+    merged.set(item[idField], localItem ? mergeRecord(localItem, item) : item);
+  });
+  return [...merged.values()].sort((first, second) => String(second.timestamp || '').localeCompare(String(first.timestamp || '')));
+}
+
+function mergeAnalysis(localAnalysis, apiAnalysis) {
+  const merged = { ...localAnalysis, ...apiAnalysis };
+  if (localAnalysis.local_verification_updated_at) {
+    merged.verification_status = localAnalysis.verification_status;
+    merged.verification_requested_at = localAnalysis.verification_requested_at || apiAnalysis.verification_requested_at;
+    merged.local_verification_updated_at = localAnalysis.local_verification_updated_at;
+  }
+  return merged;
+}
+
+function mergeAlert(localAlert, apiAlert) {
+  const merged = { ...localAlert, ...apiAlert };
+  if (localAlert.local_status_updated_at) {
+    merged.status = localAlert.status;
+    merged.local_status_updated_at = localAlert.local_status_updated_at;
+  }
+  if (localAlert.local_verification_updated_at) {
+    merged.verification_status = localAlert.verification_status;
+    merged.local_verification_updated_at = localAlert.local_verification_updated_at;
+  }
+  return merged;
+}
+
+function mergeLedger(localLedger, apiLedger) {
+  const items = new Map();
+  // API items are newest-first. Keeping that order also appends each newly
+  // returned event once without modifying its hash-chain fields.
+  [...apiLedger.items, ...localLedger.items].forEach((item) => {
+    const identifier = item.event_id || item.hash;
+    if (identifier && !items.has(identifier)) items.set(identifier, item);
+  });
+  return {
+    ...localLedger,
+    ...apiLedger,
+    valid: apiLedger.items.length ? apiLedger.valid : localLedger.valid,
+    items: [...items.values()]
+  };
+}
+
+function calculateSnapshotStats(analyses, alerts, apiStats = {}) {
+  const total = analyses.length;
+  const severity_distribution = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].reduce((distribution, severity) => {
+    distribution[severity] = analyses.filter((item) => item.severity === severity).length;
+    return distribution;
+  }, {});
+  const threat_distribution = analyses.reduce((distribution, item) => {
+    const threat = item.threat_class || item.threat_type || 'Unknown';
+    distribution[threat] = (distribution[threat] || 0) + 1;
+    return distribution;
+  }, {});
+  const average = (field, places) => total
+    ? Number((analyses.reduce((sum, item) => sum + (Number(item[field]) || 0), 0) / total).toFixed(places))
+    : null;
+  return {
+    ...apiStats,
+    total_analyses: total,
+    total_alerts: alerts.length,
+    high_risk_events: analyses.filter((item) => ['HIGH', 'CRITICAL'].includes(item.severity)).length,
+    critical_events: analyses.filter((item) => item.severity === 'CRITICAL').length,
+    average_risk: average('risk_score', 1),
+    average_processing_latency_ms: average('processing_latency_ms', 2),
+    severity_distribution,
+    risk_distribution: severity_distribution,
+    threat_distribution
+  };
+}
+
+function mergeSnapshots(localSnapshot, apiSnapshot) {
+  const local = normaliseSnapshot(localSnapshot);
+  const api = normaliseSnapshot(apiSnapshot);
+  const analyses = mergeRecords(local.analyses, api.analyses, 'analysis_id', mergeAnalysis);
+  const alerts = mergeRecords(local.alerts, api.alerts, 'alert_id', mergeAlert);
+  const ledger = mergeLedger(local.ledger, api.ledger);
+  return {
+    stats: calculateSnapshotStats(analyses, alerts, api.stats),
+    analyses,
+    alerts,
+    ledger
+  };
+}
+
 function storeSnapshot(snapshot) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ savedAt: Date.now(), snapshot }));
@@ -132,11 +241,67 @@ function storeSnapshot(snapshot) {
 function readSnapshot() {
   try {
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-    return cached?.snapshot || null;
+    return cached?.snapshot ? normaliseSnapshot(cached.snapshot) : null;
   } catch (error) {
     console.warn('Local demo cache could not be read.', error);
     return null;
   }
+}
+
+function storeAndRender(snapshot) {
+  const merged = normaliseSnapshot(snapshot);
+  storeSnapshot(merged);
+  renderSnapshot(merged);
+  return merged;
+}
+
+function alertFromAnalysis(analysis) {
+  if (!analysis.alert_created || !analysis.alert_id) return null;
+  return {
+    alert_id: analysis.alert_id,
+    analysis_id: analysis.analysis_id,
+    timestamp: analysis.timestamp,
+    severity: analysis.severity,
+    risk_score: analysis.risk_score,
+    threat_type: analysis.threat_class,
+    evidence: analysis.evidence,
+    recommended_action: analysis.recommended_action,
+    verification_status: analysis.verification_status,
+    status: 'NEW'
+  };
+}
+
+function persistAnalysisResult(analysis) {
+  const alert = alertFromAnalysis(analysis);
+  return storeAndRender(mergeSnapshots(readSnapshot() || lastSnapshot, {
+    analyses: [analysis],
+    alerts: alert ? [alert] : [],
+    ledger: { items: [] }
+  }));
+}
+
+function persistAlert(alert) {
+  const savedAlert = { ...alert, local_status_updated_at: Date.now() };
+  return storeAndRender(mergeSnapshots(readSnapshot() || lastSnapshot, {
+    alerts: [savedAlert], ledger: { items: [] }
+  }));
+}
+
+function persistVerification(analysisId, verificationStatus) {
+  const current = normaliseSnapshot(readSnapshot() || lastSnapshot);
+  const updatedAt = Date.now();
+  const analyses = current.analyses.map((analysis) => analysis.analysis_id === analysisId ? {
+    ...analysis,
+    verification_status: verificationStatus,
+    verification_requested_at: new Date(updatedAt).toISOString(),
+    local_verification_updated_at: updatedAt
+  } : analysis);
+  const alerts = current.alerts.map((alert) => alert.analysis_id === analysisId ? {
+    ...alert,
+    verification_status: verificationStatus,
+    local_verification_updated_at: updatedAt
+  } : alert);
+  return storeAndRender(mergeSnapshots(current, { analyses, alerts, ledger: { items: [] } }));
 }
 
 function renderStats(stats) {
@@ -368,6 +533,8 @@ function renderSnapshot(snapshot) {
 }
 
 async function refreshDashboard() {
+  const localSnapshot = readSnapshot() || lastSnapshot;
+  if (localSnapshot) renderSnapshot(localSnapshot);
   try {
     const health = await apiRequest('/health');
     if (health.status !== 'online') throw new Error('Health check did not report online status.');
@@ -376,13 +543,13 @@ async function refreshDashboard() {
     const [stats, analyses, alerts, ledger] = await Promise.all([
       apiRequest('/stats'), apiRequest('/analyses'), apiRequest('/alerts'), apiRequest('/ledger')
     ]);
-    const snapshot = { stats, analyses, alerts, ledger };
-    renderSnapshot(snapshot);
-    storeSnapshot(snapshot);
+    // A fresh Netlify invocation legitimately returns empty arrays. Merge it
+    // into the browser snapshot instead of letting it erase demo results.
+    storeAndRender(mergeSnapshots(localSnapshot, { stats, analyses, alerts, ledger }));
   } catch (error) {
     setSystemState('offline', `Live API data is unavailable. ${lastSnapshot ? 'Showing the last local demo snapshot.' : 'Run the Netlify Function to enable the dashboard.'}`);
     console.warn('Dashboard refresh failed:', error);
-    if (!lastSnapshot) renderSnapshot(readSnapshot());
+    if (!lastSnapshot) renderSnapshot(localSnapshot);
   }
 }
 
@@ -452,6 +619,7 @@ async function runSimulation(button) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario })
     });
     displayResult(response.result);
+    persistAnalysisResult(response.result);
     navigate('simulation');
     await refreshDashboard();
   } catch (error) {
@@ -474,9 +642,10 @@ async function updateAlertStatus(alertId, select) {
   select.disabled = true;
   setInlineStatus(ui.alertsStatus, `Saving ${alertId} as ${nextStatus}...`);
   try {
-    await apiRequest(`/alerts/${encodeURIComponent(alertId)}/status`, {
+    const alert = await apiRequest(`/alerts/${encodeURIComponent(alertId)}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: nextStatus })
     });
+    persistAlert(alert);
     setInlineStatus(ui.alertsStatus, `${alertId} is now ${nextStatus}. The update was recorded in the API state and audit chain.`, 'success');
     await refreshDashboard();
   } catch (error) {
@@ -497,6 +666,7 @@ async function requestStepUpVerification() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     });
     latestResult.verification_status = response.verification_status;
+    persistVerification(response.analysis_id, response.verification_status);
     renderVerification(latestResult);
     await refreshDashboard();
   } catch (error) {
@@ -515,7 +685,7 @@ async function verifyLedger() {
   status.textContent = 'Verifying SHA-256 hash chain...';
   try {
     const ledger = await apiRequest('/ledger');
-    renderLedger(ledger);
+    storeAndRender(mergeSnapshots(readSnapshot() || lastSnapshot, { ledger }));
   } catch (error) {
     status.className = 'ledger-status invalid';
     status.textContent = `Ledger verification could not run: ${error.message}`;
@@ -717,6 +887,7 @@ async function handleAudioFile(file) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ features })
     });
     displayResult(result);
+    persistAnalysisResult(result);
     navigate('simulation');
     setInlineStatus(ui.uploadStatus, 'Analysis complete. Raw audio was not sent to the API.', 'success');
     await refreshDashboard();
