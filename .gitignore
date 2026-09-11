@@ -20,3 +20,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Runtime/demo state
+data/db.json
+*.tmp
+*.bak
+
+# Test artifacts
+.pytest_cache/
+backend/pytest_result.txt
+
+# Local tooling / virtual environments
+.venv-codex/
