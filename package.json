@@ -1,0 +1,11 @@
+{
+  "name": "voiceshield-ai-netlify",
+  "version": "1.0.0",
+  "description": "VoiceShield AI Prototype - Netlify Serverless API",
+  "main": "app.js",
+  "scripts": {
+    "start": "npx --yes netlify-cli@17.38.1 dev",
+    "build": "echo 'No build step required for static site'",
+    "test": "node --test"
+  }
+}

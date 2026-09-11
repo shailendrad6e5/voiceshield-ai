@@ -1,115 +1,68 @@
-# VoiceShield AI — SIH26104 Prototype
+# VoiceShield AI - SIH26104
 
-**AI-Powered Real-Time Detection and Prevention of Voice Cloning Impersonation Attacks.**
+VoiceShield AI is a serverless cybersecurity demonstration prototype for assessing voice-cloning and replay-oriented impersonation risk. Its safe decision flow is:
 
-## 1. Problem
-Voice cloning and replay attacks are increasingly used in social engineering, help-desk fraud, and automated authentication bypass. A cloned voice can manipulate a human operator or bypass an unprotected voice gateway.
+`DETECT -> ANALYZE -> SCORE -> EXPLAIN -> ALERT -> VERIFY`
 
-## 2. Threat Model
-**Protected Assets:** Identity confidence, account actions, customer trust, call-center workflows.
-**Adversary Goal:** Impersonate a trusted speaker or reuse a recording to influence a decision.
-**Detection Boundary:** The system receives audio and extracts derived signal features locally; it does not place outbound calls.
+The prototype converts a supported WAV file into browser-derived numeric features, applies a deterministic JavaScript **Demonstration ML Baseline**, fuses risk signals, explains the result, creates HIGH/CRITICAL alerts, and records events in a SHA-256 tamper-evident hash chain.
 
-## 3. Architecture
-The system follows a strict security pipeline:
-**DETECT → ANALYZE → SCORE → EXPLAIN → ALERT → VERIFY**
+It does not claim universal deepfake detection, biometric identity verification, real-time streaming, or a decentralized blockchain.
 
-1. Authorized Audio Source
-2. Read-only Audio Capture
-3. Feature Extraction (12 acoustic signals)
-4. Demonstration ML Baseline + Passive Liveness Indicators + Replay Indicators
-5. 0-100 Risk Fusion Engine
-6. Prevention Policy (Step-Up Verification)
-7. Alert Center + Tamper-Evident SHA-256 Audit Ledger
+## Current implementation
 
-## 4. Features
-- **WAV Upload & Validation:** Accepts real WAV audio, checks boundaries, and handles numeric extraction safely.
-- **Simulation Lab:** 5 reproducible demonstration scenarios (NORMAL, CLONED_VOICE, REPLAY, LOW_QUALITY, MIXED_RISK).
-- **Risk Scoring:** 0-100 score classifying into LOW, MEDIUM, HIGH, and CRITICAL.
-- **Explainable Evidence:** Human-readable reasoning mapping directly to derived acoustic features.
-- **Tamper-Evident Audit Ledger:** Local JSON-backed SHA-256 hash chaining to prove audit trail integrity.
-- **Real Latency Tracking:** Dashboard shows observed processing time, not fabricated benchmarks.
+- HTML5, CSS3, and vanilla ES6 JavaScript static frontend
+- Browser-side 16-bit PCM WAV parsing and acoustic feature extraction
+- JavaScript Netlify Function API; no Python service or continuously running backend
+- Five deterministic controlled/preset feature profiles: `NORMAL`, `CLONED_VOICE`, `REPLAY`, `LOW_QUALITY`, and `MIXED_RISK`
+- Explainable Risk Fusion, analysis monitor, alert workflow, step-up verification request, and a SHA-256 tamper-evident hash chain
+- Ephemeral function-memory state plus a browser cache for graceful UI fallback; neither is durable production storage
 
-## 5. Technology Stack
-- **Frontend:** React 18, Vite, TypeScript, Lucide-React.
-- **Backend:** Python 3.10+, FastAPI, Uvicorn.
-- **Audio & ML Processing:** NumPy, SciPy, Scikit-Learn.
-- **Persistence:** Local JSON file (`data/db.json`) for demo-friendly state persistence across restarts.
+Raw WAV bytes are not sent to the API in this client flow. Browser validation accepts only 16-bit PCM, mono/stereo WAV at 8-48 kHz, 0.25-60 seconds, up to 10 MB.
 
-## 6. Audio Pipeline
-The browser (or backend in demo mode) receives the PCM samples and extracts 12 features including RMS, Zero Crossing Rate, Spectral Centroid, Bandwidth, Flatness, Rolloff, Pitch Proxy, Pitch Variation, and Silence Ratio. These features are bounded to prevent NaN/Infinity crashes.
+## Risk Fusion
 
-## 7. Risk Engine
-The risk engine fuses the Demonstration ML Baseline probability with heuristic penalty scores:
-`Risk = 50% ML + 22% Speaker Mismatch + 20% Weak Liveness + 8% Replay Evidence`
-
-## 8. Explainability
-Every risk score comes with an explanation array detailing exactly which features breached expected thresholds (e.g., "Replay Indicator observed replay-like spectral/timing characteristics").
-
-## 9. Security Controls
-- Strict input validation (5MB max upload, RIFF/WAVE header validation).
-- Safe mathematical processing of features.
-- CORS restricted to the frontend application.
-- Prevention policy only *recommends* verification; no automated destructive actions.
-
-## 10. Audit Chain
-Every completed analysis and alert status change is appended to the ledger. Each entry hashes the previous entry's hash combined with its own payload using SHA-256, guaranteeing tamper-evidence.
-
-## 11. API
-- `GET /api/health`
-- `GET /api/stats`
-- `GET /api/alerts`
-- `GET /api/ledger`
-- `POST /api/analyze` (multipart WAV upload)
-- `POST /api/simulate` (run scenario)
-- `POST /api/alerts/{id}/status` (update alert state)
-
-## 12. Demo Instructions
-1. Open the **Dashboard**. Point out the "Prototype Demonstration" and "Read-Only" trust boundaries.
-2. Run the **NORMAL** simulation. Show the low risk score.
-3. Run the **CLONED_VOICE** simulation. Highlight the CRITICAL severity and step-up verification recommendation.
-4. Click **Alert Center**. Change the status of the new alert from NEW to INVESTIGATING.
-5. Click **Audit Ledger**. Explain that the "Tamper-Evident Hash Chain" links the analysis and the status update securely.
-6. (Optional) Upload a real `demo_audio/` WAV file to prove the pipeline handles live data safely.
-
----
-
-## CURRENT PROTOTYPE vs FUTURE PRODUCTION SYSTEM
-
-### 13. Current Limitations (Prototype)
-- **Model:** The "Demonstration ML Baseline" is a Random Forest model trained on generated synthetic distributions. It is NOT a production-validated deepfake detector.
-- **Liveness/Speaker-Match:** These are implemented as heuristic acoustic math (pitch variation, dynamic range) to demonstrate the architecture, rather than true neural embeddings (like ECAPA-TDNN).
-- **Streaming:** The current prototype is request/response chunk-based.
-- **Persistence:** Local JSON file is used to keep the demo stable. 
-
-### 14. Future Roadmap (Production)
-- **Phase 1 (Done):** Prototype architecture, UI, explainable risk engine, and reproducible demo.
-- **Phase 2:** Train models on real labeled datasets (e.g., ASVspoof) and publish formal ROC/F1 evaluations.
-- **Phase 3:** Integrate robust speaker embeddings and deep-learning anti-spoofing.
-- **Phase 4:** True real-time continuous scoring via WebRTC or WebSockets.
-- **Phase 5:** Durable database storage and optional permissioned blockchain if multi-party trust is required.
-
----
-
-## Deployment Configuration
-
-**Backend:**
-The backend is a FastAPI server. It is recommended to deploy this to Render, Railway, or a traditional VPS.
-```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+```text
+risk = 100 * (
+  0.50 * clone_probability
+  + 0.22 * (1 - speaker_match)
+  + 0.20 * (1 - liveness)
+  + 0.08 * replay_score
+)
 ```
 
-**Frontend:**
-The frontend is a static Vite application. It can be easily deployed to Netlify, Vercel, or GitHub Pages. 
-Make sure to update the `API` constant in `src/main.tsx` to point to the deployed backend URL.
+The function clamps risk to 0-100. Severity is LOW below 35, MEDIUM from 35-64, HIGH from 65-84, and CRITICAL from 85-100. Speaker match, liveness, replay and confidence are risk signals - not proof of identity, fraud, or model accuracy.
+
+HIGH and CRITICAL outcomes recommend step-up verification. The prototype does not transfer money, change accounts, or take irreversible actions.
+
+## Run and test
+
 ```bash
-cd frontend
 npm install
+npm test
 npm run build
-# Deploy the 'dist' folder to your static host.
+npm start
 ```
+
+Open the local Netlify URL printed by `netlify dev`. The UI calls `/api/health` before reporting the system as online. See [DEPLOY.md](DEPLOY.md) and the [demo script](docs/DEMO_SCRIPT.md).
+
+## API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/api/health` | Live Netlify Function health |
+| GET | `/api/stats` | Dashboard metrics and distributions |
+| GET | `/api/alerts` | Current HIGH/CRITICAL alerts |
+| GET | `/api/analyses` | Recent feature-analysis results |
+| GET | `/api/ledger` | SHA-256 chain and verification result |
+| POST | `/api/simulate` | Run a controlled scenario profile |
+| POST | `/api/analyze` | Analyze validated browser-derived features |
+| POST | `/api/analyses/{id}/verification` | Record a step-up verification request for a HIGH/CRITICAL analysis |
+| POST | `/api/alerts/{id}/status` | Update `NEW`, `INVESTIGATING`, or `RESOLVED` |
+
+Full request and response details are in [docs/API.md](docs/API.md).
+
+## Transparency and limitations
+
+The **Deterministic Feature-Based Demonstration Classifier** is not a Random Forest running on Netlify and is not a production-validated anti-spoofing model. The presets are controlled feature profiles for pipeline testing, not real speech recordings. The current design is request/response; streaming, durable secure storage, authentication, multilingual/Indian-accent validation, production liveness, production anti-replay, and real model evaluation are future work.
+
+The ledger is a **SHA-256 tamper-evident hash chain**, not a decentralized blockchain. A permissioned ledger is only a possible future extension if multi-party trust makes it necessary.

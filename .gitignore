@@ -1,13 +1,9 @@
 # Node
 node_modules/
+.pnpm-store/
+pnpm-lock.yaml
+pnpm-workspace.yaml
 dist/
-.vite/
-
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
 
 # Environment
 .env
@@ -21,14 +17,12 @@ Thumbs.db
 # Logs
 *.log
 
-# Runtime/demo state
-data/db.json
+# Local runtime state
 *.tmp
 *.bak
 
 # Test artifacts
-.pytest_cache/
-backend/pytest_result.txt
+tmp/
 
 # Local tooling / virtual environments
 .venv-codex/
