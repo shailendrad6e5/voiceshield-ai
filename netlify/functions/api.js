@@ -187,8 +187,8 @@ function uploadSuspicionSignals(features) {
   if (features.dynamic_range < 0.32 && features.pitch_variation < 0.018) {
     signals.push('LIMITED_TEMPORAL_VARIATION');
   }
-  if (features.high_freq_ratio < 0.01 && features.spectral_rolloff < 1800) {
-    signals.push('NARROW_BANDWIDTH');
+  if (features.high_freq_ratio < 0.015 && features.spectral_rolloff <= 1800) {
+    signals.push('REPLAY_ORIENTED_PATTERN');
   }
   return signals;
 }
@@ -226,28 +226,18 @@ function deriveSignals(features, conservativeUpload = false) {
   };
 }
 
-function predictCloneProbability(features, presetProbability, suspiciousSignals = []) {
+function predictCloneProbability(features, presetProbability) {
   if (typeof presetProbability === 'number') return rounded(clamp(presetProbability), 4);
-
-  // Uploaded WAVs use transparent, conservative evidence fusion. A value is
-  // raised only when multiple independent acoustic pattern groups agree; it
-  // is not a biometric identity or production anti-spoofing determination.
-  const syntheticSignal = 0.06 + suspiciousSignals.length * 0.24;
-  return rounded(clamp(syntheticSignal), 4);
+  return 0.06;
 }
 
-function calculateRisk(clone_probability, signals, conservativeUpload = false) {
-  if (conservativeUpload) {
-    const risk_score = rounded(clamp(8 + signals.suspicious_signals.length * 22, 0, 100), 1);
-    const severity = risk_score >= 85 ? 'CRITICAL'
-      : risk_score >= 65 ? 'HIGH'
-        : risk_score >= 35 ? 'MEDIUM' : 'LOW';
-    return {
-      risk_score,
-      severity,
-      confidence: rounded(Math.min(90, 20 + signals.suspicious_signals.length * 20), 1)
-    };
-  }
+function predictUploadCloneProbability(suspiciousSignals) {
+  const hasClonePattern = suspiciousSignals.includes('SPECTRAL_REGULARITY');
+  if (!hasClonePattern) return rounded(0.06 + suspiciousSignals.length * 0.07, 4);
+  return rounded(0.35 + suspiciousSignals.length * 0.15, 4);
+}
+
+function calculateSimulationRisk(clone_probability, signals) {
   const risk_score = rounded(clamp(100 * (
     0.50 * clone_probability
     + 0.22 * (1 - signals.speaker_match)
@@ -267,12 +257,22 @@ function calculateRisk(clone_probability, signals, conservativeUpload = false) {
   return { risk_score, severity, confidence };
 }
 
+function calculateUploadRisk(signals) {
+  // This is an explicit decision table, not a weighted accumulation. It does
+  // not reference speaker_match, liveness, or a claimed speaker identity.
+  const groups = signals.suspicious_signals.length;
+  if (groups >= 3) return { risk_score: 88, severity: 'CRITICAL', confidence: 90 };
+  if (groups === 2) return { risk_score: 70, severity: 'HIGH', confidence: 75 };
+  if (groups === 1) return { risk_score: 32, severity: 'LOW', confidence: 45 };
+  return { risk_score: 8, severity: 'LOW', confidence: 20 };
+}
+
 function classifyThreat(clone_probability, signals, risk_score, conservativeUpload = false) {
   if (conservativeUpload) {
     if (signals.quality_score < 0.45 && signals.suspicious_signals.length < 2) {
       return 'LOW AUDIO QUALITY / INCONCLUSIVE';
     }
-    if (signals.suspicious_signals.length >= 3) return 'MULTIPLE SUSPICIOUS SIGNALS';
+    if (signals.suspicious_signals.length >= 2) return 'MULTIPLE SUSPICIOUS SIGNALS';
     if (signals.suspicious_signals.length) return 'CONTEXTUAL REVIEW REQUIRED';
     return 'LIMITED SUSPICIOUS EVIDENCE';
   }
@@ -297,7 +297,7 @@ function explain(features, clone_probability, signals, conservativeUpload = fals
     const explanations = {
       SPECTRAL_REGULARITY: 'Low spectral flatness and low zero-crossing activity formed one spectral regularity pattern.',
       LIMITED_TEMPORAL_VARIATION: 'Low dynamic range and limited pitch variation formed one temporal variation pattern.',
-      NARROW_BANDWIDTH: 'Low high-frequency energy and spectral rolloff formed one narrow-bandwidth pattern.'
+      REPLAY_ORIENTED_PATTERN: 'Low high-frequency energy and spectral rolloff formed one replay-oriented bandwidth pattern.'
     };
     signals.suspicious_signals.forEach((signal) => evidence.push({
       signal: signal.replaceAll('_', ' '),
@@ -361,8 +361,12 @@ function explain(features, clone_probability, signals, conservativeUpload = fals
 function processFeatures(features, source, startedAt, presetProbability) {
   const conservativeUpload = source === 'WAV_UPLOAD';
   const signals = deriveSignals(features, conservativeUpload);
-  const clone_probability = predictCloneProbability(features, presetProbability, signals.suspicious_signals);
-  const scoring = calculateRisk(clone_probability, signals, conservativeUpload);
+  const clone_probability = conservativeUpload
+    ? predictUploadCloneProbability(signals.suspicious_signals)
+    : predictCloneProbability(features, presetProbability);
+  const scoring = conservativeUpload
+    ? calculateUploadRisk(signals)
+    : calculateSimulationRisk(clone_probability, signals);
   const analysis = {
     analysis_id: newId('ANL'),
     timestamp: new Date().toISOString(),

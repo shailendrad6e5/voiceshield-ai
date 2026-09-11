@@ -102,8 +102,6 @@ test('VoiceShield API provides a deterministic, explainable demo pipeline', asyn
       ...validUploadFeatures,
       spectral_flatness: 0.03,
       zero_crossing_rate: 0.03,
-      dynamic_range: 0.25,
-      pitch_variation: 0.01,
       high_freq_ratio: 0.005,
       spectral_rolloff: 1400
     }
@@ -111,7 +109,31 @@ test('VoiceShield API provides a deterministic, explainable demo pipeline', asyn
   assert.equal(multiPatternUpload.status, 200);
   assert.equal(multiPatternUpload.body.severity, 'HIGH');
   assert.equal(multiPatternUpload.body.threat_class, 'MULTIPLE SUSPICIOUS SIGNALS');
-  assert.equal(multiPatternUpload.body.evidence.length, 3);
+  assert.equal(multiPatternUpload.body.evidence.length, 2);
+
+  const strongCombinedUpload = await json('POST', '/api/analyze', {
+    features: {
+      ...validUploadFeatures,
+      spectral_flatness: 0.03,
+      zero_crossing_rate: 0.03,
+      dynamic_range: 0.25,
+      pitch_variation: 0.01,
+      high_freq_ratio: 0.005,
+      spectral_rolloff: 1400
+    }
+  });
+  assert.equal(strongCombinedUpload.status, 200);
+  assert.equal(strongCombinedUpload.body.severity, 'CRITICAL');
+  assert.equal(strongCombinedUpload.body.threat_class, 'MULTIPLE SUSPICIOUS SIGNALS');
+  assert.equal(strongCombinedUpload.body.evidence.length, 3);
+
+  const speakerVariantUpload = await json('POST', '/api/analyze', {
+    features: { ...validUploadFeatures, pitch_proxy: 450 }
+  });
+  assert.equal(speakerVariantUpload.status, 200);
+  assert.notEqual(speakerVariantUpload.body.speaker_match, upload.body.speaker_match);
+  assert.equal(speakerVariantUpload.body.risk_score, upload.body.risk_score);
+  assert.equal(speakerVariantUpload.body.severity, upload.body.severity);
 
   const lowQualityUpload = await json('POST', '/api/analyze', {
     features: { ...validUploadFeatures, clipping_ratio: 0.12, silence_ratio: 0.4, quality_score: 0.2 }
@@ -129,9 +151,9 @@ test('VoiceShield API provides a deterministic, explainable demo pipeline', asyn
 
   const stats = await json('GET', '/api/stats');
   assert.equal(stats.status, 200);
-  assert.equal(stats.body.total_analyses, 9);
-  assert.equal(stats.body.high_risk_events, 4);
-  assert.equal(stats.body.critical_events, 1);
+  assert.equal(stats.body.total_analyses, 11);
+  assert.equal(stats.body.high_risk_events, 5);
+  assert.equal(stats.body.critical_events, 2);
   assert.equal(stats.body.threat_distribution['LOW AUDIO QUALITY / INCONCLUSIVE'], 2);
 
   const ledger = await json('GET', '/api/ledger');
